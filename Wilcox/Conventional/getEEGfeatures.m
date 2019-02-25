@@ -1,0 +1,525 @@
+function [features, feature_names] = getEEGfeatures(data, Fs, params)
+% [features] = GETEEGFEATURES(data, Fs, params)
+% DATA must be in the format samples x channels. If features indices are specified (in param.features), this feature is calculated
+% and returned, else all are calculated. 
+% params:
+% - features: array specifying if features must be calculated or not,
+% default all
+% - outputNames: if the names should be given as output, preferably request
+% the names only once at the beginning
+% - bands: specify if features should be calculated in a certain frequency
+% band
+% - chans: specify if only certain channels are of interest
+% add new parameters !!!
+% 
+% 1: RMS
+% 2: Coastline
+% 3: Band power
+% 4: Band power normalized
+% 5: Spectral edge frequency
+% 6: Skewness
+% 7: Kurtosis
+% 8: Autocorrelation function
+% 9: Hjorth: activity
+% 10: Hjorth: mobility
+% 11: Hjorth: complexity
+% 12: Maximum cross-correlation
+% 13: Coherence
+% 14: Non-linear energy
+% 15: Spectral entropy
+% 16: State entropy
+% 17: Response entropy
+% 18: Sample entropy
+% 19: Renyi entropy
+% 20: Shannon entropy
+% 21: Number of spikes
+% 22: Fractal dimension 
+% 23: Phase synchronization index
+% to be implemented: HFOs
+
+general_names = {'RMS'
+'Coastline'
+'Band power'
+'Band power normalized'
+'Spectral edge frequency'
+'Skewness'
+'Kurtosis'
+'Autocorrelation function'
+'Hjorth: activity'
+'Hjorth: mobility'
+'Hjorth: complexity'
+'Maximum cross-correlation'
+'Coherence'
+'Non-linear energy'
+'Spectral entropy'
+'State entropy'
+'Response entropy'
+'Sample entropy'
+'Renyi entropy'
+'Shannon entropy'
+'Spikes'
+'Fractal dimension' 
+'Phase synchronization index'};
+
+nGeneralFeatures = 23;
+% % old default bands
+% bands = [0.5 4;  % delta
+%          4 8;    % theta
+%          8 12;   % alpha
+%          12 16;  % spindle
+%          16 25;  % beta
+%          25 50;];% gamma
+% default bands
+bands = [0.5 4;  % delta
+         4 8;    % theta
+         8 12;   % alpha
+         12 16;  % spindle
+         16 25;  % beta
+         25 50;  % gamma
+         70 100;]; % high gamma
+     
+     
+%%% CHECK INPUT -----------------------------------------------------------
+if nargin < 3
+    params.features = ones(nGeneralFeatures,1);
+    params.outputNames = false;
+else
+    if ~isfield(params, 'features')
+        params.features = ones(nGeneralFeatures,1);
+    elseif length(params.features)<nGeneralFeatures || sum(params.features>1)
+        id = params.features;
+        params.features = zeros(nGeneralFeatures,1);
+        for i=1:length(id)
+            params.features(id(i)) = 1;
+        end         
+    end
+    
+    if ~isfield(params, 'outputNames')
+        params.outputNames = false;
+    end
+    
+    if isfield(params, 'bands')
+        bands = params.bands;
+    end
+    
+    if isfield(params, 'chans')
+        selch = zeros(size(data,2),1);
+        for i=1:length(params.chans)
+            selch(params.chans(i)) = 1;
+        end
+        data = data(:,selch==1);
+    end
+    
+    r = 0.2*ones(size(data,2),1);
+    % sample entropy function parameter
+    if isfield(params, 'r')
+        if length(params.r)==size(data,2)
+            r = params.r;      
+        end
+    end
+    
+    entropy_limits = [-2 2];
+    % limits of bins to create probability distribution for entropy feature
+    if isfield(params, 'entropy_limits')
+        entropy_limits = params.entropy_limits;
+    end
+    
+    
+if nargin < 2
+    error('Not enough input arguments')
+end
+
+% check that features that require multiple channels can be calculated
+nChans = size(data,2);
+if params.features(12) && nChans == 1
+    warning('Cross-correlation cannot be calculated, data has only one channel');
+    params.features(12) = 0;
+end
+if params.features(13) && nChans == 1
+    warning('Coherence cannot be calculated, data has only one channel');
+    params.features(13) = 0;
+end
+
+       
+%%% CALCULATE THE FEATURES ------------------------------------------------
+nFeats = nChans*sum(params.features) + (size(bands,1)*nChans-nChans)*(params.features(3)+params.features(4))...
+    + ((nChans^2-nChans)/2-nChans)*params.features(12) + ((nChans^2-nChans)/2*size(bands,1)-nChans)*params.features(13)...
+    + ((nChans^2-nChans)/2*size(bands,1)-nChans)*params.features(23);
+k_feat = 0; % cursor in the feature vector
+features = zeros(1,nFeats); % create vector with right size for speed
+
+
+if ~params.outputNames % calculate features only if the names were not requested
+    
+    % RMS
+    if params.features(1)
+        rms = sqrt(sum(data.*data,1)/(size(data,1)));
+        features(k_feat+1:k_feat+nChans) = rms;
+        k_feat = k_feat+nChans;   
+    end
+
+    % Coastline
+    if params.features(2)
+        line_length = sum(abs(diff(data)),1);
+        features(k_feat+1:k_feat+nChans) = line_length;
+        k_feat = k_feat+nChans; 
+    end
+
+    % Band powers
+    if params.features(3) || params.features(4) || params.features(5) || params.features(15) || params.features(16) || params.features(17)
+        window_size = size(data,1); %spectrogram window size and overlap
+        overlap = 0;
+        nfft = 2^nextpow2(window_size);      
+        % define parameters in better way!
+        [PSD, freq] = pwelch(data, window_size, overlap,...
+        nfft, Fs);
+        % use fieldtrip for frequency analysis
+%         data_ft.trial{1} = data';
+%         data_ft.fsample = Fs;
+%         label = cell(1,nChans);
+%         for i_chan=1:nChans
+%             label{i_chan} = ['data' num2str(i_chan)];
+%         end
+%         data_ft.label = label;
+%         data_ft.time = {(1:size(data,1))/Fs};
+%         data_ft.sampleinfo = [1 size(data,1)];
+%         cfg.method = 'mtmfft';
+%         cfg.output = 'pow';
+%         cfg.taper = 'hanning';
+%         cfg.pad = 'nextpow2';
+%         cfg.feedback = 'no';
+%         out = ft_freqanalysis(cfg, data_ft);
+%         PSD = out.powspctrm';
+%         freq = out.freq';
+        mean_band_power = zeros(size(bands,1)*nChans,1);
+        for i_band = 1:size(bands,1)
+            for i_chan = 1:nChans
+                mean_band_power(i_chan+(i_band-1)*nChans) = mean(PSD(and(freq>=bands(i_band,1),...
+                    freq<=bands(i_band,2)),i_chan),1);
+            end
+        end  
+        if params.features(3)
+            features(k_feat+1:k_feat+size(bands,1)*nChans) = mean_band_power;
+            k_feat = k_feat+size(bands,1)*nChans;
+        end
+    end
+
+    % normalized band powers
+    if params.features(4)
+        features(k_feat+1:k_feat+size(bands,1)*nChans) = mean_band_power/sum(mean_band_power);
+        k_feat = k_feat+size(bands,1)*nChans;      
+    end
+    
+    % spectral edge frequency
+    if params.features(5)
+        x = 0.9;
+        total_PSD = sum(PSD(freq<=40,:),1);
+        spectral_edge_freq = zeros(nChans, 1);
+        for i_chan=1:nChans
+            for j = 1:size(PSD,1)
+               if sum(PSD(1:j, i_chan))>total_PSD(i_chan)*x
+                   spectral_edge_freq(i_chan) = freq(max(j-1,1));
+                   break;
+               end
+            end
+        end
+        features(k_feat+1:k_feat+nChans) = spectral_edge_freq;
+        k_feat = k_feat+nChans;
+    end
+
+    % Skewness
+    if params.features(6)
+        skew_data = skewness(data);
+        features(k_feat+1:k_feat+nChans) = skew_data;
+        k_feat = k_feat+nChans;
+    end
+
+    % Kurtosis
+    if params.features(7)
+        kurt_data = kurtosis(data);
+        features(k_feat+1:k_feat+nChans) = kurt_data;
+        k_feat = k_feat+nChans;
+    end
+
+    % autocorrelation function
+    if params.features(8)
+        zc_acf = zeros(nChans,1);
+        for i_chan = 1:nChans
+            ACF = autocorr(data(:,i_chan));
+            for i=2:length(ACF)
+                if ACF(i)*ACF(i-1)<=0
+                    zc_acf(i_chan) = i;
+                    break;
+                end
+            end
+        end
+
+        %features(k_feat+1:k_feat+nChans) = zc_acf;
+        features(k_feat+1:k_feat+nChans) = ACF(10,:);
+        k_feat = k_feat+nChans;
+    end
+
+    % Hjorth: activity
+    if params.features(9) 
+        activity = var(data,1); % Variance of each EEG epoch. 1st Hjorth parameter
+        features(k_feat+1:k_feat+nChans) = activity;
+        k_feat = k_feat+nChans;
+    end
+
+    % Hjorth: mobility
+    if params.features(10) || params.features(11)
+        eeg_diff1 = diff(data,1,1);      % 1st derivative of EEG
+        mobility = std(eeg_diff1,1)./(std(data,1)+eps);     % EEG Mobility. 2nd Hjorth parameter
+        if params.features(10)
+            features(k_feat+1:k_feat+nChans) = mobility;
+            k_feat = k_feat+nChans;
+        end
+    end
+
+    % Hjorth: complexity
+    if params.features(11) 
+        eeg_diff2 = diff(eeg_diff1,1,1);      % 2nd derivative of EEG
+        complexity = (std(eeg_diff2,1)./std(eeg_diff1,1)+eps)./(mobility+eps);   % EEG Complexity. 3rd Hjorth parameter
+        features(k_feat+1:k_feat+nChans) = complexity;
+        k_feat = k_feat+nChans;
+    end
+
+
+    % maximum cross-correlation 
+    if params.features(12)  
+        cross_corr = zeros((nChans^2-nChans)/2,1);
+        k=0;
+        % create combinations of the channels
+        for i_chan = 1:nChans
+            for j_chan = i_chan:nChans
+                if i_chan ~= j_chan
+                    k=k+1;
+                    cross_corr(k) = max(xcorr(data(:,i_chan), data(:,j_chan)));
+                end
+            end
+        end   
+        features(k_feat+1:k_feat+(nChans^2-nChans)/2) = cross_corr;
+        k_feat = k_feat+(nChans^2-nChans)/2;
+    end
+
+    % coherence
+    if params.features(13)
+        coherence = zeros((nChans^2-nChans)/2*size(bands,1),1);
+        k=0;     
+        par.Fs = Fs;
+        par.tapers = [20 39];
+        % create combinations of the channels
+        for i_chan = 1:nChans
+            for j_chan = i_chan:nChans
+                if i_chan ~= j_chan
+                    [C,~,~,~,~,f] = coherencyc(data(:,i_chan),data(:,j_chan), par);
+                    for i_band = 1:size(bands,1)
+                        k=k+1;
+                        coherence(k) = mean(C(and(f>=bands(i_band,1), f<=bands(i_band,2))));
+                    end
+                end
+            end
+        end   
+        features(k_feat+1:k_feat+(nChans^2-nChans)/2*size(bands,1)) = coherence;
+        k_feat = k_feat+(nChans^2-nChans)/2*size(bands,1); 
+    end  
+
+    % non-linear energy
+    if params.features(14)
+        phi = data.*data;
+        phi = phi(2:end-1,:) - data(3:end,:).*data(1:end-2,:);
+        nonlin_energy = mean(phi,1);
+        features(k_feat+1:k_feat+nChans) = nonlin_energy;
+        k_feat = k_feat + nChans;
+    end
+
+    % spectral entropy
+    if params.features(15)
+        % norm the PSD
+        p = PSD/(sum(PSD+1e-12));
+        % calculate the entropy
+        spectral_entropy = -1*sum(p.*log2(p+1e-12));
+        features(k_feat+1:k_feat+nChans) = spectral_entropy;
+        k_feat = k_feat + nChans;
+    end
+
+    % state entropy
+    if params.features(16)
+        SE = zeros(1,nChans);
+        for i_chan = 1:nChans
+            ind_low=find(freq>=0.8 & freq<=32,i_chan); %see viertio oja et. al.
+            p_low = PSD(ind_low,i_chan)/(sum(PSD(ind_low,i_chan))+1e-12);
+            N_low = length(p_low)+1e-12;
+            SE(i_chan) = -1*sum(p_low.*log2(p_low+1e-12))/log2(N_low);
+        end
+        features(k_feat+1:k_feat+nChans) = SE;
+        k_feat = k_feat + nChans;   
+    end
+
+    % response entropy
+    if params.features(17)
+        RE = zeros(1,nChans);
+        for i_chan = 1:nChans
+            ind_lowhigh=find(freq>=0.8 & freq<=47,i_chan);
+            p_lowhigh = PSD(ind_lowhigh,i_chan)/(sum(PSD(ind_lowhigh,i_chan))+1e-12);
+            N_lowhigh = length(p_lowhigh)+1e-12;
+            RE(i_chan) = -1*sum(p_lowhigh.*log2(p_lowhigh+1e-12))/log2(N_lowhigh);
+        end
+        features(k_feat+1:k_feat+nChans) = RE;
+        k_feat = k_feat + nChans;     
+    end
+
+    % sample entropy
+    if params.features(18)
+        sample_entropy = zeros(1,nChans);
+        for i_chan = 1:nChans
+            sample_entropy(i_chan) = sampen(data(:,i_chan), 1, r(i_chan),0,0,0);
+        end
+        features(k_feat+1:k_feat+nChans) = sample_entropy;
+        k_feat = k_feat + nChans; 
+    end
+    
+    % renyi entropy
+    if params.features(19)
+        edges = linspace(entropy_limits(1), entropy_limits(2), 1000);
+        renyi_entropy = zeros(nChans,1);
+        alpha = 2; % quadratic renyi entropy
+        for i_chan = 1:nChans
+            N = histcounts(data(:,i_chan), edges);
+            p = N/size(data,1);
+            % ignore probabilities being zero per definition
+            p = p(p~=0);
+            sign_renyi = -2*(alpha>1)+1; % keep it positive 
+            renyi_entropy(i_chan) = -1*log2(sum(p.^alpha))/(1-alpha)*sign_renyi;
+        end            
+        features(k_feat+1:k_feat+nChans) = renyi_entropy;
+        k_feat = k_feat + nChans; 
+    end
+    
+    % shannon entropy
+    if params.features(20)
+        edges = linspace(entropy_limits(1), entropy_limits(2), 1000);
+        shannon_entropy = zeros(nChans,1);
+        for i_chan = 1:nChans
+            N = histcounts(data(:,i_chan), edges);
+            p = N/size(data,1);
+            % ignore probabilities being zero per definition
+            p = p(p~=0);
+            shannon_entropy(i_chan) = -1*sum(p.*log2(p));
+        end                 
+        features(k_feat+1:k_feat+nChans) = shannon_entropy;
+        k_feat = k_feat + nChans; 
+    end
+    
+    % spikes
+    if params.features(21)
+        nspikes = zeros(nChans,1);
+        for i_chan = 1:nChans
+            spikes = findSpikes(data(:,i_chan), Fs, [0.4 10]);
+            nspikes(i_chan) = length(spikes);
+        end
+        features(k_feat+1:k_feat+nChans) = nspikes;
+        k_feat = k_feat + nChans; 
+    end
+    
+    % fractal dimension
+    if params.features(22)
+        FD = zeros(nChans,1);
+        for i_chan = 1:nChans
+            FD(i_chan) = hfd(data(:,i_chan), 20);
+        end
+        features(k_feat+1:k_feat+nChans) = FD;
+        k_feat = k_feat + nChans; 
+    end
+    
+    % phase synchronization index
+    if params.features(23)
+        PSI = zeros((nChans^2-nChans)/2*size(bands,1),1);
+        k=0;  
+        % obtain the phase from the hilbert transform of the filtered signal in the freq bands
+        hilbert_data = zeros(length(data), nChans, size(bands,1));
+        for i_band = 1:size(bands,1)
+            for i_chan = 1:nChans
+                data_temp = butterlow(data(:,i_chan),bands(i_band,2),Fs);
+                data_temp = butterhigh(data_temp, bands(i_band,1),Fs);
+                hilbert_data(:,i_chan,i_band) = phase(hilbert(data_temp));
+            end
+        end
+        % create combinations of the channels
+        for i_chan = 1:nChans
+            for j_chan = i_chan:nChans
+                if i_chan ~= j_chan
+                    for i_band = 1:size(bands,1)
+                        k=k+1;
+                        % use the mean phase coherence based PSI
+                        PSI(k) = abs(sum(exp(1i*(hilbert_data(:,i_chan,i_band)-hilbert_data(:,j_chan,i_band)))))...
+                            /size(data,1);
+                    end
+                end
+            end
+        end   
+        features(k_feat+1:k_feat+(nChans^2-nChans)/2*size(bands,1)) = PSI;
+        k_feat = k_feat+(nChans^2-nChans)/2*size(bands,1); 
+    end  
+    
+end
+    
+    
+%%% OUTPUT THE FEATURE NAMES ----------------------------------------------
+% check if list of feature names was requested   
+if params.outputNames == true
+    feature_names = cell(nFeats,1);
+    k = 0;
+    for i=1:length(general_names)
+        if params.features(i)
+            if i == 3
+                for i_band = 1:size(bands,1)
+                    for i_chan = 1:nChans
+                        k=k+1;
+                        feature_names{k} = [general_names{i} ' ch' num2str(i_chan) ' ' ...
+                            num2str(bands(i_band,1)) '-' num2str(bands(i_band,2)) 'Hz'];
+                    end
+                end  
+            elseif i == 4
+                for i_band = 1:size(bands,1)
+                    for i_chan = 1:nChans
+                        k=k+1;
+                        feature_names{k} = [general_names{i} ' ch' num2str(i_chan) ' ' ...
+                            num2str(bands(i_band,1)) '-' num2str(bands(i_band,2)) 'Hz'];
+                    end
+                end                
+            elseif i==12
+                for i_chan = 1:nChans
+                    for j_chan = i_chan:nChans
+                        if i_chan ~= j_chan
+                            k=k+1;
+                            feature_names{k} = [general_names{i} ' ch' num2str(i_chan) '-'...
+                            num2str(j_chan)];
+                        end
+                    end
+                end 
+            elseif i==13 || i==23
+                for i_chan = 1:nChans
+                    for j_chan = i_chan:nChans
+                        if i_chan ~= j_chan
+                            for i_band = 1:size(bands,1)
+                                k=k+1;
+                                feature_names{k} = [general_names{i} ' ch' num2str(i_chan) '-' ...
+                                    num2str(j_chan) ' ' num2str(bands(i_band,1)) '-' num2str(bands(i_band,2)) 'Hz'];
+                            end
+                        end
+                    end
+                end
+            else
+                for i_chan = 1:nChans
+                    k=k+1;
+                    feature_names{k} = [general_names{i} ' ch' num2str(i_chan)];
+                end
+            end
+        end
+    end  
+else
+    feature_names = [];
+end
+
+end
