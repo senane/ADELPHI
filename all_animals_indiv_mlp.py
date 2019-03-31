@@ -83,7 +83,7 @@ def clean_animal_id(str):
 for i in range(1,13):
     index = i
     animal_id = animal_names[index-1][0]
-    sys.stdout = open("log_{}.txt".format(animal_id))
+    sys.stdout = open("log_{}.txt".format(animal_id), "w")
     print("Animal chosen: %s" % animal_names[index - 1][0])
 
     # Get features of 11/12 animals.
