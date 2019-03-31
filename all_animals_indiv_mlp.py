@@ -24,15 +24,13 @@ from sklearn.preprocessing import LabelEncoder, LabelBinarizer, StandardScaler
 from yellowbrick.classifier import ROCAUC, PrecisionRecallCurve
 from yellowbrick.model_selection import LearningCurve
 import random
+import re
+import string
 import sys
 
 
 # In[2]:
 
-
-# Save all output to file.
-sys.stdout = open("graph_logging.txt","w")
-sys.stdout.flush()
 
 # Initialize random number generator for reproducibility.
 seed = 7
@@ -73,15 +71,21 @@ def get_loo_features(df, index):
     df[df.AnimalId != index]
     return df
 
+def clean_animal_id(str):
+    allow = string.letters + string.digits
+    re.sub('[^%s]' % allow, '', str)
 
-# In[3]:
+
+# In[ ]:
 
 
 # Produce MLPClassification for each animal in the dataset.
 for i in range(1,13):
     index = i
-    print("Animal chosen: %s" % animal_names[index - 1][0])
     animal_id = animal_names[index-1][0]
+    sys.stdout = open("log_{}.txt".format(animal_id))
+    print("Animal chosen: %s" % animal_names[index - 1][0])
+
     # Get features of 11/12 animals.
     single_animal_features = get_single_animal_features(feat_data, index);
     # loo_features = get_loo_features(feat_data, index);
@@ -115,8 +119,8 @@ for i in range(1,13):
         activation='tanh')
 
     # Run model with 4-fold cross validation. Report mean accuracy.
-#     scores = cross_val_score(mlp, X_train, y_train, cv=4)
-#     print("Accuracy: %0.2f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
+    scores = cross_val_score(mlp, X_train, y_train, cv=4)
+    print("Accuracy: %0.2f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
 
     # Plot ROC, AUC.
     classes=["Normal","Pre-Ictal","Seizure"]
@@ -140,5 +144,11 @@ for i in range(1,13):
     plt.show()
     Loss_title = "Loss_{}.png".format(animal_id)
     plt.savefig(Loss_title)
-    
+sys.stdout.close()
+
+
+# In[ ]:
+
+
+
 
