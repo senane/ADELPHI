@@ -1,8 +1,9 @@
 % simple script to combine features files 
 
-files_to_merge = {'C:\Users\cashlab\Documents\MATLAB\ML\train_features_art\features_60s_2017-12-14.mat',...
-   'C:\Users\cashlab\Documents\MATLAB\ML\train_features_art\features_60s_2017-12-15.mat'};
-merged_name = 'merged_60s_art_2017-12-15';
+files_to_merge = {'T:\Projects\ADELPHI_Senan\Nico ML Backup\Desktop\interictal imbalanced artifacts\features_10s_2019-04-16.mat',...
+    'T:\Projects\ADELPHI_Senan\Nico ML Backup\Desktop\interictal imbalanced artifacts 2\features_10s_2019-04-15.mat',...
+   'E:\Data extraction 2\old_features\features_10s_2019-01-30.mat'};
+merged_name = 'merged_10s_2019-04-17';
 
 for i_file = 1:length(files_to_merge)
     load(files_to_merge{i_file})
